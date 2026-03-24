@@ -7,3 +7,4 @@ scikit-learn==1.4.2
 firebase-admin
 python-dotenv
 pydantic
+python-3.11.9
