@@ -37,7 +37,11 @@ app = FastAPI(title="SimuCare API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_allowed_origins(),
+    allow_origins=[
+        "http://localhost:3000",
+        "https://*.vercel.app",
+        "https://simu-care.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -156,3 +160,10 @@ def history(user_id: str, authorization: str = Header(default="")) -> List[Dict[
 async def predict2(data: dict) -> Dict[str, Any]:
     result = predict_model2(data)
     return result
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
