@@ -73,6 +73,48 @@ def verify_id_token(token: str) -> Dict[str, Any]:
         raise HTTPException(status_code=401, detail="Invalid or expired Firebase token.") from exc
 
 
+def build_feature_dict(form_data: Dict[str, Any]) -> Dict[str, float]:
+    age = float(form_data["age"])
+    vital_mean = float(form_data["vital_mean"])
+    lab_mean = float(form_data["lab_mean"])
+    diag_count = float(form_data["diag_count"])
+    severity_index = float(form_data["severity_index"])
+    is_male = int(form_data["is_male"])
+
+    vital_std = vital_mean * 0.3
+    vital_min = max(0.0, vital_mean - vital_std * 1.5)
+    vital_max = vital_mean + vital_std * 1.5
+    vital_count = 10.0
+    lab_count = diag_count * 5.0
+    lab_vital_ratio = lab_count / vital_count if vital_count > 0 else 1.0
+    log_los = 3.5
+
+    age_group_young = 1 if age < 35 else 0
+    age_group_adult = 1 if 35 <= age < 60 else 0
+    age_group_senior = 1 if age >= 60 else 0
+
+    return {
+        "diag_count": diag_count,
+        "vital_mean": vital_mean,
+        "vital_min": vital_min,
+        "vital_max": vital_max,
+        "vital_std": vital_std,
+        "vital_count": vital_count,
+        "lab_mean": lab_mean,
+        "lab_count": lab_count,
+        "age": age,
+        "severity_index": severity_index,
+        "lab_vital_ratio": lab_vital_ratio,
+        "log_los": log_los,
+        "is_male": is_male,
+        "insurance_Medicare": 0,
+        "insurance_Other": 0,
+        "age_group_young": age_group_young,
+        "age_group_adult": age_group_adult,
+        "age_group_senior": age_group_senior,
+    }
+
+
 @app.get("/health")
 def health() -> Dict[str, str]:
     return {"status": "ok"}
@@ -89,7 +131,8 @@ async def predict(request: PredictRequest) -> Dict[str, Any]:
     user_id = decoded["uid"]
 
     try:
-        result = predict_patient(request.data)
+        payload = build_feature_dict(request.data)
+        result = predict_patient(payload)
     except ModelInputMismatchError as exc:
         raise HTTPException(status_code=400, detail="Model input mismatch — check feature list") from exc
     except Exception as exc:
@@ -112,7 +155,7 @@ async def predict(request: PredictRequest) -> Dict[str, Any]:
                 "Readmission_Risk": result["Readmission_Risk"],
                 "ICU_LOS_hours": result["ICU_LOS_hours"],
                 "riskLevel": risk_level,
-                "inputData": request.data,
+                "inputData": payload,
             }
         )
     except Exception as exc:
@@ -124,7 +167,7 @@ async def predict(request: PredictRequest) -> Dict[str, Any]:
         "ICU_LOS_hours": result["ICU_LOS_hours"],
         "riskLevel": risk_level,
         "firestore_saved": True,
-        "inputData": request.data,
+        "inputData": payload,
     }
 
 

@@ -1,18 +1,9 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { getFeatures, predictCost, predictICU, saveToHistory } from '../api/predict';
+import { predictCost, predictICU, saveToHistory } from '../api/predict';
 import { auth, db } from '../firebase/config';
 
-const STEP_LABELS = ['Demographics', 'Vitals', 'Labs', 'Clinical', 'Admission', 'History'];
-
-/** Step → form keys that must be non-empty valid numbers before Next / submit */
-const REQUIRED_BY_STEP = {
-  1: ['age'],
-  2: ['heartRate', 'systolicBP', 'diastolicBP', 'respiratoryRate', 'temperature', 'spo2', 'map'],
-  3: ['wbc', 'hemoglobin', 'platelets', 'creatinine', 'bun', 'sodium', 'potassium', 'glucose'],
-  4: ['gcsScore', 'sofaScore', 'diagnosisCount', 'severityIndex'],
-  5: ['prevIcuAdmissions'],
-};
+const STEP_LABELS = ['Patient Inputs'];
 
 function isNonEmptyNumber(val) {
   const s = String(val ?? '').trim();
@@ -21,28 +12,32 @@ function isNonEmptyNumber(val) {
   return Number.isFinite(n);
 }
 
-function validateStepFields(step, form) {
-  const keys = REQUIRED_BY_STEP[step] || [];
+function validateIcuForm(form) {
   const errors = {};
-  keys.forEach((k) => {
-    if (!isNonEmptyNumber(form[k])) errors[k] = 'This field is required';
-  });
-  return errors;
-}
+  const v = (key) => Number(form[key]);
+  const int = (key) => Number.isInteger(v(key));
+  const inRange = (key, min, max) => isNonEmptyNumber(form[key]) && v(key) >= min && v(key) <= max;
 
-function validateAllICUSteps(form) {
-  const errors = {};
-  for (let s = 1; s <= 5; s += 1) {
-    Object.assign(errors, validateStepFields(s, form));
+  if (!inRange('diag_count', 1, 20) || !int('diag_count')) {
+    errors.diag_count = 'Required: integer between 1 and 20';
   }
-  return errors;
-}
+  if (!inRange('vital_mean', 0, 200)) {
+    errors.vital_mean = 'Required: number between 0 and 200';
+  }
+  if (!inRange('lab_mean', 0, 200)) {
+    errors.lab_mean = 'Required: number between 0 and 200';
+  }
+  if (!inRange('age', 0, 120) || !int('age')) {
+    errors.age = 'Required: integer between 0 and 120';
+  }
+  if (!(form.is_male === '1' || form.is_male === '0')) {
+    errors.is_male = 'Please select gender';
+  }
+  if (!inRange('severity_index', 0, 3000) || !int('severity_index')) {
+    errors.severity_index = 'Required: integer between 0 and 3000';
+  }
 
-function firstStepWithErrors(form) {
-  for (let s = 1; s <= 5; s += 1) {
-    if (Object.keys(validateStepFields(s, form)).length) return s;
-  }
-  return null;
+  return errors;
 }
 
 function formatPredictError(err) {
@@ -61,12 +56,12 @@ function formatPredictError(err) {
 }
 
 const initForm = {
-  age: '', gender: 'Male',
-  heartRate: '', systolicBP: '', diastolicBP: '', respiratoryRate: '', temperature: '', spo2: '', map: '',
-  wbc: '', hemoglobin: '', platelets: '', creatinine: '', bun: '', sodium: '', potassium: '', glucose: '',
-  gcsScore: '', sofaScore: '', diagnosisCount: '', severityIndex: '',
-  admissionType: 'Emergency', icuType: 'Medical', prevIcuAdmissions: '', insuranceType: 'Medicare',
-  diabetes: false, hypertension: false, heartDisease: false, ckd: false, copd: false, onVentilator: false, onVasopressors: false,
+  diag_count: '',
+  vital_mean: '',
+  lab_mean: '',
+  age: '',
+  is_male: '1',
+  severity_index: '',
 };
 
 const initCostForm = {
@@ -99,7 +94,7 @@ function InputField({ label, k, value, onChange, type = 'number', placeholder = 
 
 export default function PredictForm() {
   const [tab, setTab] = useState('icu');
-  const [step, setStep] = useState(1);
+  const [step] = useState(1);
   const [form, setForm] = useState(initForm);
   const [costForm, setCostForm] = useState(initCostForm);
   const [loading, setLoading] = useState(false);
@@ -119,25 +114,12 @@ export default function PredictForm() {
   };
   const setC = (k, v) => setCostForm((f) => ({ ...f, [k]: v }));
 
-  const goNext = () => {
-    setError('');
-    const errs = validateStepFields(step, form);
-    if (Object.keys(errs).length) {
-      setFieldErrors(errs);
-      return;
-    }
-    setFieldErrors({});
-    setStep((s) => Math.min(6, s + 1));
-  };
-
   const handleSubmitICU = async () => {
     setError('');
-    const allErrs = validateAllICUSteps(form);
+    const allErrs = validateIcuForm(form);
     if (Object.keys(allErrs).length) {
       setFieldErrors(allErrs);
-      const first = firstStepWithErrors(form);
-      if (first != null) setStep(first);
-      setError('Please fill in all required fields before running the prediction.');
+      setError('Please fill in all required fields with valid ranges.');
       return;
     }
     setFieldErrors({});
@@ -146,50 +128,19 @@ export default function PredictForm() {
     try {
       const user = auth.currentUser;
       const token = user ? await user.getIdToken() : null;
-      const colsRes = await getFeatures();
-      const allCols = colsRes.data;
-      const features = {};
-      allCols.forEach((c) => { features[c] = 0; });
-
-      features.age = parseFloat(form.age) || 0;
-      features.heart_rate = parseFloat(form.heartRate) || 0;
-      features.systolic_bp = parseFloat(form.systolicBP) || 0;
-      features.diastolic_bp = parseFloat(form.diastolicBP) || 0;
-      features.resp_rate = parseFloat(form.respiratoryRate) || 0;
-      features.temperature = parseFloat(form.temperature) || 0;
-      features.spo2 = parseFloat(form.spo2) || 0;
-      features.map = parseFloat(form.map) || 0;
-      features.wbc = parseFloat(form.wbc) || 0;
-      features.hemoglobin = parseFloat(form.hemoglobin) || 0;
-      features.platelets = parseFloat(form.platelets) || 0;
-      features.creatinine = parseFloat(form.creatinine) || 0;
-      features.bun = parseFloat(form.bun) || 0;
-      features.sodium = parseFloat(form.sodium) || 0;
-      features.potassium = parseFloat(form.potassium) || 0;
-      features.glucose = parseFloat(form.glucose) || 0;
-      features.gcs_score = parseFloat(form.gcsScore) || 0;
-      features.sofa_score = parseFloat(form.sofaScore) || 0;
-      features.diagnosis_count = parseFloat(form.diagnosisCount) || 0;
-      features.severity_index = parseFloat(form.severityIndex) || 0;
-      features.previous_icu_admissions = parseFloat(form.prevIcuAdmissions) || 0;
-      if (form.gender === 'Male') features.gender_Male = 1;
-      if (form.gender === 'Female') features.gender_Female = 1;
-      features[`admission_type_${form.admissionType}`] = 1;
-      features[`icu_type_${form.icuType}`] = 1;
-      features[`insurance_${form.insuranceType}`] = 1;
-      features.diabetes = form.diabetes ? 1 : 0;
-      features.hypertension = form.hypertension ? 1 : 0;
-      features.heart_disease = form.heartDisease ? 1 : 0;
-      features.ckd = form.ckd ? 1 : 0;
-      features.copd = form.copd ? 1 : 0;
-      features.on_ventilator = form.onVentilator ? 1 : 0;
-      features.on_vasopressors = form.onVasopressors ? 1 : 0;
-
-      const payload = token ? { token, data: features } : { features };
+      const payloadData = {
+        diag_count: Number(form.diag_count),
+        vital_mean: Number(form.vital_mean),
+        lab_mean: Number(form.lab_mean),
+        age: Number(form.age),
+        is_male: Number(form.is_male),
+        severity_index: Number(form.severity_index),
+      };
+      const payload = { token, data: payloadData };
       const res = await predictICU(payload);
       const result = res.data;
 
-      if (user && db) await saveToHistory(db, user.uid, form, result);
+      if (user && db) await saveToHistory(db, user.uid, payloadData, result);
       navigate('/results', { state: { result, formData: form } });
     } catch (err) {
       setError(formatPredictError(err));
@@ -216,76 +167,53 @@ export default function PredictForm() {
   const steps = [
     <div key={1}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-        <InputField label="Age (years)" k="age" value={form.age} onChange={set} min={0} max={120} placeholder="e.g. 65" error={fieldErrors.age} />
+        <div className="form-group">
+          <label>Number of Diagnosed Conditions</label>
+          <input type="number" min={1} max={20} step={1} placeholder="e.g. 2" value={form.diag_count} onChange={(e) => set('diag_count', e.target.value)} />
+          <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>Total conditions diagnosed (e.g. Diabetes + Hypertension = 2)</span>
+          {fieldErrors.diag_count ? <span className="field-inline-error">{fieldErrors.diag_count}</span> : null}
+        </div>
+
+        <div className="form-group">
+          <label>Average Vital Signs Score</label>
+          <input type="number" min={0} max={200} step="any" placeholder="e.g. 75" value={form.vital_mean} onChange={(e) => set('vital_mean', e.target.value)} />
+          <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>Normal: 60-90 | Moderate: 90-120 | Critical: 120-180</span>
+          {fieldErrors.vital_mean ? <span className="field-inline-error">{fieldErrors.vital_mean}</span> : null}
+        </div>
+
+        <div className="form-group">
+          <label>Average Lab Test Result</label>
+          <input type="number" min={0} max={200} step="any" placeholder="e.g. 35" value={form.lab_mean} onChange={(e) => set('lab_mean', e.target.value)} />
+          <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>Normal: 20-40 | Abnormal: 40-70 | Severe: 70-120</span>
+          {fieldErrors.lab_mean ? <span className="field-inline-error">{fieldErrors.lab_mean}</span> : null}
+        </div>
+
+        <div className="form-group">
+          <label>Patient Age</label>
+          <input type="number" min={0} max={120} step={1} placeholder="e.g. 58" value={form.age} onChange={(e) => set('age', e.target.value)} />
+          <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>Age in years</span>
+          {fieldErrors.age ? <span className="field-inline-error">{fieldErrors.age}</span> : null}
+        </div>
+
         <div className="form-group">
           <label>Gender</label>
-          <div className="radio-group">
-            {['Male', 'Female'].map((g) => (
-              <label key={g} className={`radio-option ${form.gender === g ? 'selected' : ''}`}>
-                <input type="radio" value={g} checked={form.gender === g} onChange={() => set('gender', g)} /> {g}
-              </label>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>,
-    <div key={2} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-      <InputField label="Heart Rate (bpm)" k="heartRate" value={form.heartRate} onChange={set} placeholder="60-100" error={fieldErrors.heartRate} />
-      <InputField label="Systolic BP (mmHg)" k="systolicBP" value={form.systolicBP} onChange={set} placeholder="e.g. 120" error={fieldErrors.systolicBP} />
-      <InputField label="Diastolic BP (mmHg)" k="diastolicBP" value={form.diastolicBP} onChange={set} placeholder="e.g. 80" error={fieldErrors.diastolicBP} />
-      <InputField label="Respiratory Rate (breaths/min)" k="respiratoryRate" value={form.respiratoryRate} onChange={set} placeholder="12-20" error={fieldErrors.respiratoryRate} />
-      <InputField label="Temperature (°C)" k="temperature" value={form.temperature} onChange={set} placeholder="e.g. 37.0" error={fieldErrors.temperature} />
-      <InputField label="SpO2 (%)" k="spo2" value={form.spo2} onChange={set} placeholder="95-100" error={fieldErrors.spo2} />
-      <InputField label="Mean Arterial Pressure (mmHg)" k="map" value={form.map} onChange={set} placeholder="e.g. 93" error={fieldErrors.map} />
-    </div>,
-    <div key={3} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-      <InputField label="WBC Count (K/uL)" k="wbc" value={form.wbc} onChange={set} placeholder="4-11" error={fieldErrors.wbc} />
-      <InputField label="Hemoglobin (g/dL)" k="hemoglobin" value={form.hemoglobin} onChange={set} placeholder="12-17" error={fieldErrors.hemoglobin} />
-      <InputField label="Platelet Count (K/uL)" k="platelets" value={form.platelets} onChange={set} placeholder="150-400" error={fieldErrors.platelets} />
-      <InputField label="Serum Creatinine (mg/dL)" k="creatinine" value={form.creatinine} onChange={set} placeholder="0.6-1.2" error={fieldErrors.creatinine} />
-      <InputField label="Blood Urea Nitrogen (mg/dL)" k="bun" value={form.bun} onChange={set} placeholder="7-20" error={fieldErrors.bun} />
-      <InputField label="Serum Sodium (mEq/L)" k="sodium" value={form.sodium} onChange={set} placeholder="136-145" error={fieldErrors.sodium} />
-      <InputField label="Serum Potassium (mEq/L)" k="potassium" value={form.potassium} onChange={set} placeholder="3.5-5.0" error={fieldErrors.potassium} />
-      <InputField label="Blood Glucose (mg/dL)" k="glucose" value={form.glucose} onChange={set} placeholder="70-100" error={fieldErrors.glucose} />
-    </div>,
-    <div key={4} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-      <InputField label="GCS Score (3-15)" k="gcsScore" value={form.gcsScore} onChange={set} min={3} max={15} placeholder="e.g. 14" error={fieldErrors.gcsScore} />
-      <InputField label="SOFA Score (0-24)" k="sofaScore" value={form.sofaScore} onChange={set} min={0} max={24} placeholder="e.g. 4" error={fieldErrors.sofaScore} />
-      <InputField label="Diagnosis Count" k="diagnosisCount" value={form.diagnosisCount} onChange={set} placeholder="e.g. 3" error={fieldErrors.diagnosisCount} />
-      <InputField label="Severity Index (0-10)" k="severityIndex" value={form.severityIndex} onChange={set} min={0} max={10} placeholder="e.g. 6" error={fieldErrors.severityIndex} />
-    </div>,
-    <div key={5} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-      {[
-        ['Admission Type', 'admissionType', ['Emergency', 'Elective', 'Urgent']],
-        ['ICU Type', 'icuType', ['Medical', 'Surgical', 'Cardiac', 'Neuro']],
-        ['Insurance Type', 'insuranceType', ['Medicare', 'Medicaid', 'Private', 'Other']],
-      ].map(([label, k, opts]) => (
-        <div key={k} className="form-group">
-          <label>{label}</label>
-          <select value={form[k]} onChange={(e) => set(k, e.target.value)}>
-            {opts.map((o) => <option key={o} value={o}>{o}</option>)}
+          <select value={form.is_male} onChange={(e) => set('is_male', e.target.value)}>
+            <option value="1">Male</option>
+            <option value="0">Female</option>
           </select>
+          {fieldErrors.is_male ? <span className="field-inline-error">{fieldErrors.is_male}</span> : null}
         </div>
-      ))}
-      <InputField label="Previous ICU Admissions" k="prevIcuAdmissions" value={form.prevIcuAdmissions} onChange={set} placeholder="e.g. 0" error={fieldErrors.prevIcuAdmissions} />
-    </div>,
-    <div key={6}>
-      <div className="form-group" style={{ marginBottom: '2rem' }}>
-        <label>Medical History</label>
-        <div className="checkbox-group">
-          {[
-            ['diabetes', 'Diabetes'], ['hypertension', 'Hypertension'], ['heartDisease', 'Heart Disease'],
-            ['ckd', 'Chronic Kidney Disease'], ['copd', 'COPD'], ['onVentilator', 'On Ventilator'],
-            ['onVasopressors', 'On Vasopressors'],
-          ].map(([k, label]) => (
-            <label key={k} className={`checkbox-option ${form[k] ? 'checked' : ''}`}>
-              <input type="checkbox" checked={form[k]} onChange={(e) => set(k, e.target.checked)} /> {label}
-            </label>
-          ))}
+
+        <div className="form-group">
+          <label>Overall Severity Score</label>
+          <input type="number" min={0} max={3000} step={1} placeholder="e.g. 600" value={form.severity_index} onChange={(e) => set('severity_index', e.target.value)} />
+          <span style={{ color: 'var(--muted)', fontSize: '0.75rem' }}>Mild: 200-500 | Moderate: 500-1000 | Severe: 1000-2000+</span>
+          {fieldErrors.severity_index ? <span className="field-inline-error">{fieldErrors.severity_index}</span> : null}
         </div>
       </div>
-      {error && <div className="auth-error" style={{ marginBottom: '1rem' }}>{error}</div>}
-      <button className="btn-primary" style={{ width: '100%', padding: '1rem' }} onClick={handleSubmitICU} disabled={loading}>
+
+      {error && <div className="auth-error" style={{ marginBottom: '1rem', marginTop: '1.5rem' }}>{error}</div>}
+      <button className="btn-primary" style={{ width: '100%', padding: '1rem', marginTop: '1.5rem' }} onClick={handleSubmitICU} disabled={loading}>
         {loading ? 'Running Prediction...' : '⚡ Predict ICU Risk Now'}
       </button>
     </div>,
@@ -322,10 +250,10 @@ export default function PredictForm() {
           {steps[step - 1]}
 
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '2rem' }}>
-            <button className="btn-secondary" onClick={() => setStep((s) => Math.max(1, s - 1))} disabled={step === 1} style={{ opacity: step === 1 ? 0.4 : 1 }}>
+            <button className="btn-secondary" disabled style={{ opacity: 0.4 }}>
               ← Back
             </button>
-            {step < 6 && <button className="btn-primary" onClick={goNext}>Next →</button>}
+            <button className="btn-primary" disabled style={{ opacity: 0.4 }}>Next →</button>
           </div>
         </div>
       )}
