@@ -1,3 +1,5 @@
+import json
+import os
 from typing import Any, Dict, List
 
 import firebase_admin
@@ -10,9 +12,23 @@ from pydantic import BaseModel
 from predict import predict_patient
 from predict2 import predict_model2
 
-if not firebase_admin._apps:
-    cred = credentials.Certificate("firebase-adminsdk.json")
+def _init_firebase() -> None:
+    if firebase_admin._apps:
+        return
+    service_account_json = os.getenv("FIREBASE_SERVICE_ACCOUNT_KEY")
+    if service_account_json:
+        cred = credentials.Certificate(json.loads(service_account_json))
+    else:
+        cred = credentials.Certificate("firebase-adminsdk.json")
     firebase_admin.initialize_app(cred)
+
+
+def _allowed_origins() -> List[str]:
+    origins_raw = os.getenv("FRONTEND_ORIGINS", "http://localhost:3000,https://simu-care.vercel.app")
+    return [origin.strip() for origin in origins_raw.split(",") if origin.strip()]
+
+
+_init_firebase()
 db = firestore.client()
 
 feature_columns = joblib.load("models/feature_columns.pkl")
@@ -21,7 +37,7 @@ app = FastAPI(title="SimuCare API")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
