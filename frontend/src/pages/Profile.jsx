@@ -7,8 +7,8 @@ export default function Profile() {
   const user = auth.currentUser;
   const [name, setName] = useState(user?.displayName || "");
   const [email, setEmail] = useState(user?.email || "");
-  const [role, setRole] = useState("");
-  const [hospital, setHospital] = useState("");
+  const [age, setAge] = useState("");
+  const [gender, setGender] = useState("Male");
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -19,9 +19,9 @@ export default function Profile() {
       const snap = await getDoc(doc(db, "users", user.uid));
       if (snap.exists()) {
         const data = snap.data();
-        setRole(data.role || "");
-        setHospital(data.hospital || "");
         if (data.name && !user.displayName) setName(data.name);
+        if (data.age != null && data.age !== "") setAge(String(data.age));
+        if (data.gender) setGender(data.gender);
       }
     };
     load();
@@ -30,6 +30,11 @@ export default function Profile() {
   const handleSave = async (e) => {
     e.preventDefault();
     if (!user) return;
+    const ageNum = Number(age);
+    if (age.trim() === "" || !Number.isInteger(ageNum) || ageNum < 0 || ageNum > 120) {
+      setError("Please enter a valid age (0–120).");
+      return;
+    }
     setSaving(true);
     setMessage("");
     setError("");
@@ -41,8 +46,8 @@ export default function Profile() {
           uid: user.uid,
           name: name.trim(),
           email: user.email,
-          role: role.trim(),
-          hospital: hospital.trim(),
+          age: ageNum,
+          gender,
           updatedAt: serverTimestamp(),
         },
         { merge: true }
@@ -58,26 +63,29 @@ export default function Profile() {
   return (
     <div className="page-wrap">
       <h1 className="page-title">My Profile</h1>
-      <p className="page-sub">Manage your professional identity and account details</p>
+      <p className="page-sub">Update your name, age, gender, and email</p>
       <div className="card profile-card">
         {error && <div className="auth-error" style={{ marginBottom: "1rem" }}>{error}</div>}
         {message && <div className="profile-success">{message}</div>}
         <form onSubmit={handleSave} className="profile-form">
           <div className="form-group">
-            <label>Full Name</label>
-            <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Dr. Avinash Tanwar" required />
+            <label>Name</label>
+            <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Jane Smith" required />
           </div>
           <div className="form-group">
             <label>Email Address</label>
             <input type="email" value={email} disabled />
           </div>
           <div className="form-group">
-            <label>Clinical Role</label>
-            <input type="text" value={role} onChange={(e) => setRole(e.target.value)} placeholder="ICU Physician" />
+            <label>Age (years)</label>
+            <input type="number" min={0} max={120} step={1} value={age} onChange={(e) => setAge(e.target.value)} placeholder="e.g. 58" required />
           </div>
           <div className="form-group">
-            <label>Hospital / Organization</label>
-            <input type="text" value={hospital} onChange={(e) => setHospital(e.target.value)} placeholder="City General Hospital" />
+            <label>Gender</label>
+            <select value={gender} onChange={(e) => setGender(e.target.value)}>
+              <option value="Male">Male</option>
+              <option value="Female">Female</option>
+            </select>
           </div>
           <button type="submit" className="btn-primary" disabled={saving}>
             {saving ? "Saving..." : "Save Profile"}

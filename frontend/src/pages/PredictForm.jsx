@@ -244,7 +244,7 @@ export default function PredictForm() {
             <h2 style={{ fontFamily: 'Syne, sans-serif', fontSize: '1.2rem', fontWeight: 800, color: 'var(--white)', marginBottom: '0.3rem' }}>
               Step {step} - {STEP_LABELS[step - 1]}
             </h2>
-            <p style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>Fill in the patient details below</p>
+            <p style={{ color: 'var(--muted)', fontSize: '0.85rem' }}>Six health metrics below — used only for this risk estimate</p>
           </div>
 
           {steps[step - 1]}

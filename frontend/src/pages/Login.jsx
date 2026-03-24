@@ -46,12 +46,12 @@ export default function Login() {
         <div className="auth-logo">
           Simu<span>Care</span>
         </div>
-        <p className="auth-subtitle">Sign in to your clinical dashboard</p>
+        <p className="auth-subtitle">Sign in with your email and password</p>
         {error && <div className="auth-error" style={{ marginBottom: '1rem' }}>{error}</div>}
         <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
           <div className="form-group">
             <label>Email Address</label>
-            <input type="email" placeholder="doctor@hospital.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
+            <input type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </div>
           <div className="form-group">
             <label>Password</label>
@@ -62,7 +62,7 @@ export default function Login() {
           </button>
         </form>
         <p className="auth-switch">
-          Don't have an account? <Link to="/signup">Create one</Link>
+          Don&apos;t have an account? <Link to="/signup">Create one</Link>
         </p>
       </div>
     </div>
