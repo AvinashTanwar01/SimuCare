@@ -5,6 +5,61 @@ import { auth, db } from '../firebase/config';
 
 const STEP_LABELS = ['Demographics', 'Vitals', 'Labs', 'Clinical', 'Admission', 'History'];
 
+/** Step → form keys that must be non-empty valid numbers before Next / submit */
+const REQUIRED_BY_STEP = {
+  1: ['age'],
+  2: ['heartRate', 'systolicBP', 'diastolicBP', 'respiratoryRate', 'temperature', 'spo2', 'map'],
+  3: ['wbc', 'hemoglobin', 'platelets', 'creatinine', 'bun', 'sodium', 'potassium', 'glucose'],
+  4: ['gcsScore', 'sofaScore', 'diagnosisCount', 'severityIndex'],
+  5: ['prevIcuAdmissions'],
+};
+
+function isNonEmptyNumber(val) {
+  const s = String(val ?? '').trim();
+  if (s === '') return false;
+  const n = Number(s);
+  return Number.isFinite(n);
+}
+
+function validateStepFields(step, form) {
+  const keys = REQUIRED_BY_STEP[step] || [];
+  const errors = {};
+  keys.forEach((k) => {
+    if (!isNonEmptyNumber(form[k])) errors[k] = 'This field is required';
+  });
+  return errors;
+}
+
+function validateAllICUSteps(form) {
+  const errors = {};
+  for (let s = 1; s <= 5; s += 1) {
+    Object.assign(errors, validateStepFields(s, form));
+  }
+  return errors;
+}
+
+function firstStepWithErrors(form) {
+  for (let s = 1; s <= 5; s += 1) {
+    if (Object.keys(validateStepFields(s, form)).length) return s;
+  }
+  return null;
+}
+
+function formatPredictError(err) {
+  const d = err?.response?.data?.detail;
+  if (typeof d === 'string') {
+    if (d.includes('Model input mismatch')) return d;
+    if (d.startsWith('Prediction failed:')) return d;
+    if (err?.response?.status === 400) return `Prediction failed: ${d}`;
+    return d;
+  }
+  if (Array.isArray(d) && d.length) {
+    const msg = d.map((x) => x?.msg || JSON.stringify(x)).join(' ');
+    return `Prediction failed: ${msg}`;
+  }
+  return 'Prediction failed. Please check your inputs and try again.';
+}
+
 const initForm = {
   age: '', gender: 'Male',
   heartRate: '', systolicBP: '', diastolicBP: '', respiratoryRate: '', temperature: '', spo2: '', map: '',
@@ -23,11 +78,21 @@ const initCostForm = {
   discount_eligibility: 'no',
 };
 
-function InputField({ label, k, value, onChange, type = 'number', placeholder = '', min, max }) {
+function InputField({ label, k, value, onChange, type = 'number', placeholder = '', min, max, error }) {
   return (
     <div className="form-group">
       <label>{label}</label>
-      <input type={type} placeholder={placeholder} value={value} onChange={(e) => onChange(k, e.target.value)} min={min} max={max} />
+      <input
+        type={type}
+        placeholder={placeholder}
+        value={value}
+        onChange={(e) => onChange(k, e.target.value)}
+        min={min}
+        max={max}
+        aria-invalid={error ? 'true' : undefined}
+        style={error ? { borderColor: 'rgba(239, 68, 68, 0.7)' } : undefined}
+      />
+      {error ? <span className="field-inline-error">{error}</span> : null}
     </div>
   );
 }
@@ -40,12 +105,42 @@ export default function PredictForm() {
   const [loading, setLoading] = useState(false);
   const [costResult, setCostResult] = useState(null);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState({});
   const navigate = useNavigate();
 
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const set = (k, v) => {
+    setFieldErrors((e) => {
+      if (!e[k]) return e;
+      const next = { ...e };
+      delete next[k];
+      return next;
+    });
+    setForm((f) => ({ ...f, [k]: v }));
+  };
   const setC = (k, v) => setCostForm((f) => ({ ...f, [k]: v }));
 
+  const goNext = () => {
+    setError('');
+    const errs = validateStepFields(step, form);
+    if (Object.keys(errs).length) {
+      setFieldErrors(errs);
+      return;
+    }
+    setFieldErrors({});
+    setStep((s) => Math.min(6, s + 1));
+  };
+
   const handleSubmitICU = async () => {
+    setError('');
+    const allErrs = validateAllICUSteps(form);
+    if (Object.keys(allErrs).length) {
+      setFieldErrors(allErrs);
+      const first = firstStepWithErrors(form);
+      if (first != null) setStep(first);
+      setError('Please fill in all required fields before running the prediction.');
+      return;
+    }
+    setFieldErrors({});
     setLoading(true);
     setError('');
     try {
@@ -97,7 +192,7 @@ export default function PredictForm() {
       if (user && db) await saveToHistory(db, user.uid, form, result);
       navigate('/results', { state: { result, formData: form } });
     } catch (err) {
-      setError('Prediction failed. Please check your inputs and try again.');
+      setError(formatPredictError(err));
       console.error(err);
     } finally {
       setLoading(false);
@@ -121,7 +216,7 @@ export default function PredictForm() {
   const steps = [
     <div key={1}>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-        <InputField label="Age (years)" k="age" value={form.age} onChange={set} min={0} max={120} placeholder="e.g. 65" />
+        <InputField label="Age (years)" k="age" value={form.age} onChange={set} min={0} max={120} placeholder="e.g. 65" error={fieldErrors.age} />
         <div className="form-group">
           <label>Gender</label>
           <div className="radio-group">
@@ -135,29 +230,29 @@ export default function PredictForm() {
       </div>
     </div>,
     <div key={2} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-      <InputField label="Heart Rate (bpm)" k="heartRate" value={form.heartRate} onChange={set} placeholder="60-100" />
-      <InputField label="Systolic BP (mmHg)" k="systolicBP" value={form.systolicBP} onChange={set} placeholder="e.g. 120" />
-      <InputField label="Diastolic BP (mmHg)" k="diastolicBP" value={form.diastolicBP} onChange={set} placeholder="e.g. 80" />
-      <InputField label="Respiratory Rate (breaths/min)" k="respiratoryRate" value={form.respiratoryRate} onChange={set} placeholder="12-20" />
-      <InputField label="Temperature (°C)" k="temperature" value={form.temperature} onChange={set} placeholder="e.g. 37.0" />
-      <InputField label="SpO2 (%)" k="spo2" value={form.spo2} onChange={set} placeholder="95-100" />
-      <InputField label="Mean Arterial Pressure (mmHg)" k="map" value={form.map} onChange={set} placeholder="e.g. 93" />
+      <InputField label="Heart Rate (bpm)" k="heartRate" value={form.heartRate} onChange={set} placeholder="60-100" error={fieldErrors.heartRate} />
+      <InputField label="Systolic BP (mmHg)" k="systolicBP" value={form.systolicBP} onChange={set} placeholder="e.g. 120" error={fieldErrors.systolicBP} />
+      <InputField label="Diastolic BP (mmHg)" k="diastolicBP" value={form.diastolicBP} onChange={set} placeholder="e.g. 80" error={fieldErrors.diastolicBP} />
+      <InputField label="Respiratory Rate (breaths/min)" k="respiratoryRate" value={form.respiratoryRate} onChange={set} placeholder="12-20" error={fieldErrors.respiratoryRate} />
+      <InputField label="Temperature (°C)" k="temperature" value={form.temperature} onChange={set} placeholder="e.g. 37.0" error={fieldErrors.temperature} />
+      <InputField label="SpO2 (%)" k="spo2" value={form.spo2} onChange={set} placeholder="95-100" error={fieldErrors.spo2} />
+      <InputField label="Mean Arterial Pressure (mmHg)" k="map" value={form.map} onChange={set} placeholder="e.g. 93" error={fieldErrors.map} />
     </div>,
     <div key={3} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-      <InputField label="WBC Count (K/uL)" k="wbc" value={form.wbc} onChange={set} placeholder="4-11" />
-      <InputField label="Hemoglobin (g/dL)" k="hemoglobin" value={form.hemoglobin} onChange={set} placeholder="12-17" />
-      <InputField label="Platelet Count (K/uL)" k="platelets" value={form.platelets} onChange={set} placeholder="150-400" />
-      <InputField label="Serum Creatinine (mg/dL)" k="creatinine" value={form.creatinine} onChange={set} placeholder="0.6-1.2" />
-      <InputField label="Blood Urea Nitrogen (mg/dL)" k="bun" value={form.bun} onChange={set} placeholder="7-20" />
-      <InputField label="Serum Sodium (mEq/L)" k="sodium" value={form.sodium} onChange={set} placeholder="136-145" />
-      <InputField label="Serum Potassium (mEq/L)" k="potassium" value={form.potassium} onChange={set} placeholder="3.5-5.0" />
-      <InputField label="Blood Glucose (mg/dL)" k="glucose" value={form.glucose} onChange={set} placeholder="70-100" />
+      <InputField label="WBC Count (K/uL)" k="wbc" value={form.wbc} onChange={set} placeholder="4-11" error={fieldErrors.wbc} />
+      <InputField label="Hemoglobin (g/dL)" k="hemoglobin" value={form.hemoglobin} onChange={set} placeholder="12-17" error={fieldErrors.hemoglobin} />
+      <InputField label="Platelet Count (K/uL)" k="platelets" value={form.platelets} onChange={set} placeholder="150-400" error={fieldErrors.platelets} />
+      <InputField label="Serum Creatinine (mg/dL)" k="creatinine" value={form.creatinine} onChange={set} placeholder="0.6-1.2" error={fieldErrors.creatinine} />
+      <InputField label="Blood Urea Nitrogen (mg/dL)" k="bun" value={form.bun} onChange={set} placeholder="7-20" error={fieldErrors.bun} />
+      <InputField label="Serum Sodium (mEq/L)" k="sodium" value={form.sodium} onChange={set} placeholder="136-145" error={fieldErrors.sodium} />
+      <InputField label="Serum Potassium (mEq/L)" k="potassium" value={form.potassium} onChange={set} placeholder="3.5-5.0" error={fieldErrors.potassium} />
+      <InputField label="Blood Glucose (mg/dL)" k="glucose" value={form.glucose} onChange={set} placeholder="70-100" error={fieldErrors.glucose} />
     </div>,
     <div key={4} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
-      <InputField label="GCS Score (3-15)" k="gcsScore" value={form.gcsScore} onChange={set} min={3} max={15} placeholder="e.g. 14" />
-      <InputField label="SOFA Score (0-24)" k="sofaScore" value={form.sofaScore} onChange={set} min={0} max={24} placeholder="e.g. 4" />
-      <InputField label="Diagnosis Count" k="diagnosisCount" value={form.diagnosisCount} onChange={set} placeholder="e.g. 3" />
-      <InputField label="Severity Index (0-10)" k="severityIndex" value={form.severityIndex} onChange={set} min={0} max={10} placeholder="e.g. 6" />
+      <InputField label="GCS Score (3-15)" k="gcsScore" value={form.gcsScore} onChange={set} min={3} max={15} placeholder="e.g. 14" error={fieldErrors.gcsScore} />
+      <InputField label="SOFA Score (0-24)" k="sofaScore" value={form.sofaScore} onChange={set} min={0} max={24} placeholder="e.g. 4" error={fieldErrors.sofaScore} />
+      <InputField label="Diagnosis Count" k="diagnosisCount" value={form.diagnosisCount} onChange={set} placeholder="e.g. 3" error={fieldErrors.diagnosisCount} />
+      <InputField label="Severity Index (0-10)" k="severityIndex" value={form.severityIndex} onChange={set} min={0} max={10} placeholder="e.g. 6" error={fieldErrors.severityIndex} />
     </div>,
     <div key={5} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem' }}>
       {[
@@ -172,7 +267,7 @@ export default function PredictForm() {
           </select>
         </div>
       ))}
-      <InputField label="Previous ICU Admissions" k="prevIcuAdmissions" value={form.prevIcuAdmissions} onChange={set} placeholder="e.g. 0" />
+      <InputField label="Previous ICU Admissions" k="prevIcuAdmissions" value={form.prevIcuAdmissions} onChange={set} placeholder="e.g. 0" error={fieldErrors.prevIcuAdmissions} />
     </div>,
     <div key={6}>
       <div className="form-group" style={{ marginBottom: '2rem' }}>
@@ -230,7 +325,7 @@ export default function PredictForm() {
             <button className="btn-secondary" onClick={() => setStep((s) => Math.max(1, s - 1))} disabled={step === 1} style={{ opacity: step === 1 ? 0.4 : 1 }}>
               ← Back
             </button>
-            {step < 6 && <button className="btn-primary" onClick={() => setStep((s) => Math.min(6, s + 1))}>Next →</button>}
+            {step < 6 && <button className="btn-primary" onClick={goNext}>Next →</button>}
           </div>
         </div>
       )}

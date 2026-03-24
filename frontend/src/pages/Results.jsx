@@ -2,8 +2,24 @@ import { useLocation, useNavigate } from 'react-router-dom';
 
 function getLevel(pct) {
   if (pct < 30) return { cls: 'low', label: 'Low Risk' };
-  if (pct < 70) return { cls: 'mid', label: 'Moderate' };
+  if (pct <= 60) return { cls: 'mid', label: 'Moderate' };
   return { cls: 'high', label: 'High Risk' };
+}
+
+function validateICUResult(result) {
+  if (!result || typeof result !== 'object') return 'Invalid prediction response.';
+  const { ICU_Risk, Readmission_Risk, ICU_LOS_hours } = result;
+  const okNum = (v) => typeof v === 'number' && Number.isFinite(v);
+  if (!okNum(ICU_Risk) || ICU_Risk < 0 || ICU_Risk > 1) {
+    return 'ICU risk is missing or outside the valid range (0–100%). Results cannot be shown.';
+  }
+  if (!okNum(Readmission_Risk) || Readmission_Risk < 0 || Readmission_Risk > 1) {
+    return 'Readmission risk is missing or outside the valid range (0–100%). Results cannot be shown.';
+  }
+  if (!okNum(ICU_LOS_hours) || ICU_LOS_hours < 0 || ICU_LOS_hours > 2000) {
+    return 'Predicted ICU stay is missing or outside the valid range (0–2000 hours). Results cannot be shown.';
+  }
+  return null;
 }
 
 export default function Results() {
@@ -20,9 +36,23 @@ export default function Results() {
   }
 
   const { result } = state;
+  const validationError = validateICUResult(result);
+
+  if (validationError) {
+    return (
+      <div className="page-wrap">
+        <h1 className="page-title">Prediction Results</h1>
+        <div className="auth-error" style={{ textAlign: 'left', maxWidth: '36rem', margin: '0 auto 2rem' }}>
+          {validationError}
+        </div>
+        <button className="btn-primary" onClick={() => navigate('/predict')}>New Prediction</button>
+      </div>
+    );
+  }
+
   const icuPct = Math.round((result.ICU_Risk ?? 0) * 100);
   const readPct = Math.round((result.Readmission_Risk ?? 0) * 100);
-  const losHours = Math.round(result.ICU_LOS_hours ?? 0);
+  const losHours = Math.round((result.ICU_LOS_hours ?? 0) * 10) / 10;
   const losDays = (losHours / 24).toFixed(1);
   const losBarPct = Math.min(100, (losHours / 168) * 100);
 
@@ -37,6 +67,9 @@ export default function Results() {
       <div className="results-grid">
         <div className="gauge-card">
           <div className="gauge-title">ICU Risk Score</div>
+          <p style={{ color: 'var(--muted)', fontSize: '0.9rem', fontWeight: 600, margin: '0 0 0.5rem' }}>
+            ICU Risk: <span style={{ color: 'var(--white)' }}>{icuPct}%</span>
+          </p>
           <div className={`gauge-circle ${icu.cls}`}>
             <span className="gauge-pct">{icuPct}%</span>
             <span className="gauge-label">{icu.label}</span>
@@ -46,6 +79,9 @@ export default function Results() {
 
         <div className="gauge-card">
           <div className="gauge-title">30-Day Readmission</div>
+          <p style={{ color: 'var(--muted)', fontSize: '0.9rem', fontWeight: 600, margin: '0 0 0.5rem' }}>
+            Readmission Risk: <span style={{ color: 'var(--white)' }}>{readPct}%</span>
+          </p>
           <div className={`gauge-circle ${read.cls}`}>
             <span className="gauge-pct">{readPct}%</span>
             <span className="gauge-label">{read.label}</span>
@@ -54,7 +90,7 @@ export default function Results() {
         </div>
 
         <div className="gauge-card">
-          <div className="gauge-title">ICU Stay Duration</div>
+          <div className="gauge-title">Predicted ICU Stay</div>
           <div style={{ margin: '1rem 0' }}>
             <div className="los-number">{losHours}h</div>
             <div className="los-sub">≈ {losDays} days</div>

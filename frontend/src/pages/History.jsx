@@ -26,7 +26,7 @@ export default function History() {
     fetch();
   }, []);
 
-  const level = (pct) => (pct < 30 ? 'low' : pct < 70 ? 'mid' : 'high');
+  const level = (pct) => (pct < 30 ? 'low' : pct <= 60 ? 'mid' : 'high');
 
   return (
     <div className="page-wrap">

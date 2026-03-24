@@ -139,6 +139,7 @@ a { color: inherit; text-decoration: none; }
   box-shadow: 0 0 0 3px var(--cyan-glow);
 }
 .form-group input::placeholder { color: var(--muted); }
+.field-inline-error { color: var(--danger); font-size: 0.75rem; font-weight: 600; }
 .form-group select option { background: var(--navy-mid); color: var(--white); }
 
 /* Radio groups */

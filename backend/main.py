@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from firebase_admin import auth, credentials, firestore
 from pydantic import BaseModel
 
-from predict import predict_patient
+from predict import ModelInputMismatchError, predict_patient
 from predict2 import predict_model2
 
 def _init_firebase() -> None:
@@ -61,7 +61,7 @@ async def root() -> Dict[str, str]:
 def get_risk_level(icu_risk: float) -> str:
     if icu_risk < 0.3:
         return "Low"
-    if icu_risk <= 0.7:
+    if icu_risk <= 0.6:
         return "Moderate"
     return "High"
 
@@ -90,13 +90,15 @@ async def predict(request: PredictRequest) -> Dict[str, Any]:
 
     try:
         result = predict_patient(request.data)
+    except ModelInputMismatchError as exc:
+        raise HTTPException(status_code=400, detail="Model input mismatch — check feature list") from exc
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Prediction failed: {str(exc)}") from exc
 
     icu_risk = result["ICU_Risk"]
     if icu_risk < 0.3:
         risk_level = "Low"
-    elif icu_risk < 0.7:
+    elif icu_risk <= 0.6:
         risk_level = "Moderate"
     else:
         risk_level = "High"
